@@ -1,0 +1,116 @@
+BASE: ['']
+# python main.py --config_file ./configs/train_configs/PURE_PURE_AYA_RHYTHMFORMER.yaml
+#
+# === STRATEGY ===
+# TRAIN: PURE  (BEGIN 0.0 - END 0.8)
+# VALID: PURE  (BEGIN 0.8 - END 1.0)
+# TEST:  Aya   (subject split handled inside AyaLoader.py; BEGIN/END ignored)
+#
+TOOLBOX_MODE: "train_and_test"      # "train_and_test"  or "only_test"
+TRAIN:
+  BATCH_SIZE: 4
+  EPOCHS: 30
+  LR: 9e-3
+  MODEL_FILE_NAME: PURE_AYA_RhythmFormer
+  PLOT_LOSSES_AND_LR: True
+  DATA:
+    FS: 30
+    DATASET: PURE
+    DO_PREPROCESS: True                # set True the first time you preprocess
+    DATA_FORMAT: NDCHW
+    DATA_PATH: "D:/PURE"                     # Raw dataset path, need to be updated
+    CACHED_PATH: "D:/rppg_cache_Rhythm"             # Processed dataset save path
+    EXP_DATA_NAME: ""
+    BEGIN: 0.0
+    END: 0.8
+    PREPROCESS:
+      DATA_TYPE: ['Standardized']
+      DATA_AUG: ['None']
+      LABEL_TYPE: Standardized
+      DO_CHUNK: True
+      CHUNK_LENGTH: 160
+      CROP_FACE:
+        DO_CROP_FACE: True
+        BACKEND: 'HC'
+        USE_LARGE_FACE_BOX: True
+        LARGE_BOX_COEF: 1.5
+        DETECTION:
+          DO_DYNAMIC_DETECTION: False
+          DYNAMIC_DETECTION_FREQUENCY: 30
+          USE_MEDIAN_FACE_BOX: False
+      RESIZE:
+        H: 128
+        W: 128
+VALID:
+  DATA:
+    FS: 30
+    DATASET: PURE
+    DO_PREPROCESS: True
+    DATA_FORMAT: NDCHW
+    DATA_PATH: "D:/PURE"                     # Raw dataset path, need to be updated
+    CACHED_PATH: "D:/rppg_cache_Rhythm"             # Processed dataset save path
+    EXP_DATA_NAME: ""
+    BEGIN: 0.8
+    END: 1.0
+    PREPROCESS:
+      DATA_TYPE: ['Standardized']
+      DATA_AUG: ['None']
+      LABEL_TYPE: Standardized
+      DO_CHUNK: True
+      CHUNK_LENGTH: 160
+      CROP_FACE:
+        DO_CROP_FACE: True
+        BACKEND: 'HC'
+        USE_LARGE_FACE_BOX: True
+        LARGE_BOX_COEF: 1.5
+        DETECTION:
+          DO_DYNAMIC_DETECTION: False
+          DYNAMIC_DETECTION_FREQUENCY: 30
+          USE_MEDIAN_FACE_BOX: False
+      RESIZE:
+        H: 128
+        W: 128
+TEST:
+  METRICS: ['MAE', 'RMSE', 'MAPE', 'Pearson', 'SNR', 'BA']
+  USE_LAST_EPOCH: False
+  DATA:
+    FS: 50                                  # Aya is 50 fps (matches your Aya config)
+    DATASET: Aya
+    DO_PREPROCESS: True                     # set False after the first run to reuse the cache
+    DATA_FORMAT: NDCHW
+    DATA_PATH: "E:/rppg_dataset"            # raw Aya path (from your Aya config)
+    CACHED_PATH: "D:/PreprocessedData/Aya_v2_test"
+    EXP_DATA_NAME: ""
+    BEGIN: 0.0                              # AyaLoader handles subject split internally
+    END: 1.0
+    PREPROCESS:
+      DATA_TYPE: ['Standardized']           # must match the model's training input type
+      LABEL_TYPE: Standardized
+      DO_CHUNK: True
+      CHUNK_LENGTH: 160                     # keep equal to training chunk length
+      CROP_FACE:
+        DO_CROP_FACE: True
+        BACKEND: 'INSIGHT'                  # Aya config used INSIGHT; keep it consistent with your Aya pipeline
+        USE_LARGE_FACE_BOX: True
+        LARGE_BOX_COEF: 1.5
+        DETECTION:
+          DO_DYNAMIC_DETECTION: False
+          DYNAMIC_DETECTION_FREQUENCY: 30
+          USE_MEDIAN_FACE_BOX: False
+      RESIZE:
+        H: 128                              # match training resolution
+        W: 128
+DEVICE: cuda:0
+NUM_OF_GPU_TRAIN: 1
+LOG:
+  PATH: runs/rhythm
+MODEL:
+  DROP_RATE: 0.2
+  NAME: RhythmFormer
+INFERENCE:
+  BATCH_SIZE: 4
+  EVALUATION_METHOD: "FFT"                  # "FFT" or "peak detection"
+  EVALUATION_WINDOW:
+    USE_SMALLER_WINDOW: False
+    WINDOW_SIZE: 10
+  MODEL_PATH: "runs/rhythm/PURE_SizeW128_SizeH128_ClipLength160_DataTypeStandardized_DataAugNone_LabelTypeStandardized_Crop_faceTrue_BackendHC_Large_boxTrue_Large_size1.5_Dyamic_DetFalse_det_len30_Median_face_boxFalse/PreTrainedModels/PURE_AYA_RhythmFormer_Epoch16.pth"

@@ -1,0 +1,124 @@
+BASE: ['']
+# python main.py --config_file ./configs/train_configs/Daily_Daily_Daily_FACTORIZEPHYS_split.yaml
+
+TOOLBOX_MODE: "train_and_test"
+TRAIN:
+  BATCH_SIZE: 4
+  EPOCHS: 30                                 # official FactorizePhys configs use 10 epochs
+  LR: 1e-3                                   # OneCycleLR + Adam; 1e-3 is the official peak LR
+  MODEL_FILE_NAME: Aya_Aya_FactorizePhys_FSAM_Res_v2
+  PLOT_LOSSES_AND_LR: True
+  DATA:
+    FS: 50
+    DATASET: Aya
+    DO_PREPROCESS: False                      # must re-preprocess: DATA_FORMAT & normalization changed
+    DATA_FORMAT: NCDHW                       # FactorizePhys wants channel-first 3D: [B, C, T, H, W]
+    DATA_PATH: "E:/rppg_dataset"
+    CACHED_PATH: "D:/PreprocessedData/Aya_factorizephys_train"   # NEW cache dir (different preprocessing)
+    EXP_DATA_NAME: ""
+    BEGIN: 0.0
+    END: 1.0
+    PREPROCESS:
+      DATA_TYPE: ['Raw']                     # REQUIRED for FactorizePhys — model does diff+norm internally
+      DATA_AUG: ['None']
+      LABEL_TYPE: Standardized               # changed from DiffNormalized
+      DO_CHUNK: True
+      CHUNK_LENGTH: 160                      # 160 for Standard model (240 if you switch TYPE to "Big")
+      CROP_FACE:
+        DO_CROP_FACE: True
+        BACKEND: 'INSIGHT'
+        USE_LARGE_FACE_BOX: True
+        LARGE_BOX_COEF: 1.5
+        DETECTION:
+          DO_DYNAMIC_DETECTION: False
+          DYNAMIC_DETECTION_FREQUENCY: 30
+          USE_MEDIAN_FACE_BOX: False
+      RESIZE:
+        H: 72                                # Standard variant: 72x72 (Big variant uses 128x128)
+        W: 72
+VALID:
+  DATA:
+    FS: 50
+    DATASET: Aya
+    DO_PREPROCESS: True
+    DATA_FORMAT: NCDHW
+    DATA_PATH: "E:/rppg_dataset"
+    CACHED_PATH: "D:/PreprocessedData/Aya_factorizephys_valid"
+    EXP_DATA_NAME: ""
+    BEGIN: 0.0
+    END: 1.0
+    PREPROCESS:
+      DATA_TYPE: ['Raw']
+      DATA_AUG: ['None']
+      LABEL_TYPE: Standardized
+      DO_CHUNK: True
+      CHUNK_LENGTH: 160
+      CROP_FACE:
+        DO_CROP_FACE: True
+        BACKEND: 'INSIGHT'
+        USE_LARGE_FACE_BOX: True
+        LARGE_BOX_COEF: 1.5
+        DETECTION:
+          DO_DYNAMIC_DETECTION: False
+          DYNAMIC_DETECTION_FREQUENCY: 30
+          USE_MEDIAN_FACE_BOX: False
+      RESIZE:
+        H: 72
+        W: 72
+TEST:
+  METRICS: ['MAE', 'RMSE', 'MAPE', 'MACC', 'Pearson', 'SNR', 'BA']   # added MACC (official config uses it)
+  USE_LAST_EPOCH: True                       # official FactorizePhys configs use last epoch, not best valid
+  DATA:
+    FS: 50
+    DATASET: Aya
+    DO_PREPROCESS: True
+    DATA_FORMAT: NCDHW
+    DATA_PATH: "E:/rppg_dataset"
+    CACHED_PATH: "D:/PreprocessedData/Aya_factorizephys_test"
+    EXP_DATA_NAME: ""
+    BEGIN: 0.0
+    END: 1.0
+    PREPROCESS:
+      DATA_TYPE: ['Raw']
+      DATA_AUG: ['None']
+      LABEL_TYPE: Standardized
+      DO_CHUNK: True
+      CHUNK_LENGTH: 160
+      CROP_FACE:
+        DO_CROP_FACE: True
+        BACKEND: 'INSIGHT'
+        USE_LARGE_FACE_BOX: True
+        LARGE_BOX_COEF: 1.5
+        DETECTION:
+          DO_DYNAMIC_DETECTION: False
+          DYNAMIC_DETECTION_FREQUENCY: 30
+          USE_MEDIAN_FACE_BOX: False
+      RESIZE:
+        H: 72
+        W: 72
+DEVICE: cuda:0
+NUM_OF_GPU_TRAIN: 1
+LOG:
+  PATH: runs/factorizephys
+MODEL:
+  DROP_RATE: 0.1                             # FactorizePhys official configs use 0.1 (vs 0.2 for DeepPhys)
+  NAME: FactorizePhys                        # changed from DeepPhys
+  FactorizePhys:                             # NEW sub-block required for FactorizePhys
+    TYPE: "Standard"                         # "Standard" (72x72, 160 frames) or "Big" (128x128, 240 frames)
+    CHANNELS: 3                              # RGB input
+    FRAME_NUM: 160                           # must match CHUNK_LENGTH above
+    MD_FSAM: True                            # enable Factorized Self-Attention Module (paper's main contribution)
+    MD_TYPE: "NMF"                           # matrix factorization type
+    MD_TRANSFORM: "T_KAB"                    # default
+    MD_R: 1
+    MD_S: 1
+    MD_STEPS: 4
+    MD_INFERENCE: True                       # run FSAM at inference time too
+    MD_RESIDUAL: True                        # residual connection around FSAM ("FSAM_Res" variant)
+INFERENCE:
+  BATCH_SIZE: 4
+  EVALUATION_METHOD: "FFT"
+  EVALUATION_WINDOW:
+    USE_SMALLER_WINDOW: False
+    WINDOW_SIZE: 10
+  MODEL_PATH: "runs/factorizephys\PURE_SizeW72_SizeH72_ClipLength160_DataTypeRaw_DataAugNone_LabelTypeStandardized_Crop_faceTrue_BackendY5F_Large_boxTrue_Large_size1.5_Dyamic_DetTrue_det_len30_Median_face_boxFalse\PreTrainedModels\PURE_PURE_MMPD_factorizephys_Epoch29.pth"                            # fill in after training when you want to run only_test

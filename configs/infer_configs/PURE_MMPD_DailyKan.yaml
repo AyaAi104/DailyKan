@@ -1,0 +1,126 @@
+BASE: ['']
+# python main.py --config_file ./configs/train_configs/PURE_MMPD_DailyKan.yaml
+
+TOOLBOX_MODE: "only_test"
+TRAIN:
+  BATCH_SIZE: 2
+  EPOCHS: 30
+  LR: 0.001
+  MODEL_FILE_NAME: PURE_PURE_MMPD_DailyKan
+  PLOT_LOSSES_AND_LR: True
+  DATA:
+    FS: 30
+    DATASET: PURE
+    DO_PREPROCESS: True
+    DATA_FORMAT: NDCHW
+    DATA_PATH: "D:/PURE"
+    CACHED_PATH: "D:/rppg_cache_dailykan"
+    EXP_DATA_NAME: ""
+    BEGIN: 0.0
+    END: 0.8
+    PREPROCESS:
+      DATA_TYPE: ['DiffNormalized', 'Standardized']
+      DATA_AUG: ['None']
+      LABEL_TYPE: DiffNormalized
+      DO_CHUNK: True
+      CHUNK_LENGTH: 180
+      CROP_FACE:
+        DO_CROP_FACE: True
+        BACKEND: 'INSIGHT'
+        USE_LARGE_FACE_BOX: True
+        LARGE_BOX_COEF: 1.35
+        DETECTION:
+          DO_DYNAMIC_DETECTION: True
+          DYNAMIC_DETECTION_FREQUENCY: 1
+          USE_MEDIAN_FACE_BOX: False
+      RESIZE:
+        H: 72
+        W: 72
+VALID:
+  DATA:
+    FS: 30
+    DATASET: PURE
+    DO_PREPROCESS: True
+    DATA_FORMAT: NDCHW
+    DATA_PATH: "D:/PURE"
+    CACHED_PATH: "D:/rppg_cache_dailykan"
+    EXP_DATA_NAME: ""
+    BEGIN: 0.8
+    END: 1.0
+    PREPROCESS:
+      DATA_TYPE: ['DiffNormalized', 'Standardized']
+      DATA_AUG: ['None']
+      LABEL_TYPE: DiffNormalized
+      DO_CHUNK: True
+      CHUNK_LENGTH: 180
+      CROP_FACE:
+        DO_CROP_FACE: True
+        BACKEND: 'INSIGHT'
+        USE_LARGE_FACE_BOX: True
+        LARGE_BOX_COEF: 1.35
+        DETECTION:
+          DO_DYNAMIC_DETECTION: True
+          DYNAMIC_DETECTION_FREQUENCY: 1
+          USE_MEDIAN_FACE_BOX: False
+      RESIZE:
+        H: 72
+        W: 72
+TEST:
+  METRICS: ['MAE', 'RMSE', 'MAPE', 'Pearson', 'SNR', 'BA']
+  USE_LAST_EPOCH: False
+  DATA:
+    FS: 30
+    DATASET: MMPD
+    DO_PREPROCESS: False
+    DATA_FORMAT: NDCHW
+    DATA_PATH: "D:/MMPD"
+    CACHED_PATH: "D:/rppg_cache_dailykan"
+    EXP_DATA_NAME: ""
+    BEGIN: 0.0
+    END: 1.0
+    INFO:
+      LIGHT: [1, 2, 3, 4]
+      MOTION: [1, 2, 3, 4]
+      EXERCISE: [1, 2]
+      SKIN_COLOR: [3, 4, 5, 6]
+      GENDER: [1, 2]
+      GLASSER: [1, 2]
+      HAIR_COVER: [1, 2]
+      MAKEUP: [1, 2]
+    PREPROCESS:
+      DATA_TYPE: ['DiffNormalized', 'Standardized']
+      DATA_AUG: ['None']
+      LABEL_TYPE: DiffNormalized
+      DO_CHUNK: True
+      CHUNK_LENGTH: 180
+      CROP_FACE:
+        DO_CROP_FACE: True
+        BACKEND: 'INSIGHT'
+        USE_LARGE_FACE_BOX: True
+        LARGE_BOX_COEF: 1.35
+        DETECTION:
+          DO_DYNAMIC_DETECTION: True
+          DYNAMIC_DETECTION_FREQUENCY: 1
+          USE_MEDIAN_FACE_BOX: False
+      RESIZE:
+        H: 72
+        W: 72
+DEVICE: cuda:0
+NUM_OF_GPU_TRAIN: 1
+LOG:
+  PATH: runs/dailykan
+MODEL:
+  DROP_RATE: 0.1
+  NAME: DailyKan
+  DAILYKAN:
+    WIDTH: 32
+    GRID_SIZE: 8
+    POSE_HIDDEN: 32
+    WEIGHT_DECAY: 0.0001
+INFERENCE:
+  BATCH_SIZE: 2
+  EVALUATION_METHOD: "FFT"
+  EVALUATION_WINDOW:
+    USE_SMALLER_WINDOW: False
+    WINDOW_SIZE: 10
+  MODEL_PATH: "runs/dailykan/PURE_SizeW72_SizeH72_ClipLength180_DataTypeDiffNormalized_Standardized_DataAugNone_LabelTypeDiffNormalized_Crop_faceTrue_BackendINSIGHT_Large_boxTrue_Large_size1.35_Dyamic_DetTrue_det_len1_Median_face_boxFalse/PreTrainedModels/PURE_PURE_MMPD_DailyKan_Epoch29.pth"

@@ -1,0 +1,116 @@
+BASE: ['']
+TOOLBOX_MODE: "train_and_test"      # "train_and_test" or "only_test"
+
+TRAIN:
+  BATCH_SIZE: 4
+  EPOCHS: 10
+  LR: 1e-4
+  MODEL_FILE_NAME: PURE_PURE_SCAMPS_tscan
+  PLOT_LOSSES_AND_LR: True
+  DATA:
+    FS: 30
+    DATASET: PURE
+    DO_PREPROCESS: False               # First run: True; afterwards set to False
+    DATA_FORMAT: NDCHW
+    DATA_PATH: "D:/PURE"     # <-- Change to your PURE raw dataset path
+    CACHED_PATH: "D:/rppg_cache"      # <-- Preprocessed/cache output directory
+    EXP_DATA_NAME: ""
+    BEGIN: 0.0
+    END: 0.8
+    PREPROCESS:
+      DATA_TYPE: ['DiffNormalized','Standardized']   # Common default; compatible with many models
+      DATA_AUG: ['None']              # 'None' or 'Motion'
+      LABEL_TYPE: DiffNormalized
+      DO_CHUNK: True
+      CHUNK_LENGTH: 160
+      CROP_FACE:
+        DO_CROP_FACE: True
+        BACKEND: 'HC'                 # HC for Haar Cascade, Y5F for YOLO5Face
+        USE_LARGE_FACE_BOX: True
+        LARGE_BOX_COEF: 1.5
+        DETECTION:
+          DO_DYNAMIC_DETECTION: False
+          DYNAMIC_DETECTION_FREQUENCY : 30
+          USE_MEDIAN_FACE_BOX: False  # Use only with dynamic detection
+      RESIZE:
+        H: 128
+        W: 128
+
+VALID:
+  DATA:
+    FS: 30
+    DATASET: PURE
+    DO_PREPROCESS: False                # First run: True; afterwards set to False
+    DATA_FORMAT: NDCHW
+    DATA_PATH: "D:/PURE"      # <-- Same PURE path as above
+    CACHED_PATH: "D:/rppg_cache"       # <-- Same cache directory as above
+    EXP_DATA_NAME: ""
+    BEGIN: 0.8
+    END: 1.0
+    PREPROCESS:
+      DATA_TYPE: ['DiffNormalized','Standardized']
+      DATA_AUG: ['None']
+      LABEL_TYPE: DiffNormalized
+      DO_CHUNK: True
+      CHUNK_LENGTH: 160
+      CROP_FACE:
+        DO_CROP_FACE: True
+        BACKEND: 'HC'
+        USE_LARGE_FACE_BOX: True
+        LARGE_BOX_COEF: 1.5
+        DETECTION:
+          DO_DYNAMIC_DETECTION: False
+          DYNAMIC_DETECTION_FREQUENCY : 30
+          USE_MEDIAN_FACE_BOX: False
+      RESIZE:
+        H: 128
+        W: 128
+
+TEST:
+  METRICS: ['MAE', 'RMSE', 'MAPE', 'Pearson', 'SNR', 'BA']
+  USE_LAST_EPOCH: False                # Use best epoch selected by VALID split
+  DATA:
+    FS: 30
+    DATASET: SCAMPS
+    DO_PREPROCESS: False                # First run: True; afterwards set to False
+    DATA_FORMAT: NDCHW
+    DATA_PATH: "D:/SCAMPS"    # <-- Change to your SCAMPS raw dataset path
+    CACHED_PATH: "D:/rppg_cache"       # <-- Use same or separate cache dir
+    EXP_DATA_NAME: ""
+    BEGIN: 0.0
+    END: 1.0
+    PREPROCESS:
+      DATA_TYPE: ['DiffNormalized','Standardized']    # DeepPhys works with this default
+      LABEL_TYPE: DiffNormalized
+      DO_CHUNK: True
+      CHUNK_LENGTH: 160
+      CROP_FACE:
+        DO_CROP_FACE: True
+        BACKEND: 'HC'
+        USE_LARGE_FACE_BOX: True
+        LARGE_BOX_COEF: 1.5
+        DETECTION:
+          DO_DYNAMIC_DETECTION: False
+          DYNAMIC_DETECTION_FREQUENCY : 30
+          USE_MEDIAN_FACE_BOX: False
+      RESIZE:
+        H: 128
+        W: 128
+
+DEVICE: cuda:0
+NUM_OF_GPU_TRAIN: 1
+
+LOG:
+  PATH: C:\\run
+
+MODEL:
+  NAME: Tscan
+  DROP_RATE: 0.2
+
+INFERENCE:
+  BATCH_SIZE: 4
+  EVALUATION_METHOD: "FFT"             # "FFT" or "peak detection"
+  EVALUATION_WINDOW:
+    USE_SMALLER_WINDOW: False
+    WINDOW_SIZE: 30
+  MODEL_PATH: ""

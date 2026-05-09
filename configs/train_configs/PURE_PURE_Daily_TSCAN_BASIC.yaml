@@ -1,0 +1,129 @@
+BASE: ['']
+# python main.py --config_file ./configs/train_configs/PURE_PURE_Daily_TSCAN_BASIC.yaml
+#
+# === STRATEGY ===
+# TRAIN/VALID: PURE @ 30 fps  (BEGIN/END split: 0.0–0.8 train, 0.8–1.0 valid)
+# TEST:        Aya  @ 50 fps  (subject + condition filtering inside AyaLoader)
+#
+# Cross-FPS notes:
+#   - PURE is 30 fps, Aya is 50 fps. TSCAN is frame-rate agnostic at the model
+#     level (it does temporal differencing per-frame), so we keep model weights
+#     unchanged and just feed 50 fps clips at test time.
+#   - CHUNK_LENGTH 300 @ 50 fps = 6 seconds, matching CHUNK_LENGTH 180 @ 30 fps
+#     in training. Same FFT frequency resolution → fair HR estimation.
+#   - TEST.DATA.FS=50 is the critical setting; post-processing FFT uses this fs.
+#
+# === IMPORTANT ===
+# Do NOT reuse a CACHED_PATH that was preprocessed under different settings
+# (e.g. BACKEND=INSIGHT, or with Aya-trained DiffNormalized stats). Use a fresh
+# CACHED_PATH for this experiment so DO_PREPROCESS regenerates from raw video.
+TOOLBOX_MODE: "train_and_test"      # "train_and_test"  or "only_test"
+TRAIN:
+  BATCH_SIZE: 4
+  EPOCHS: 30
+  LR: 9e-3
+  MODEL_FILE_NAME: PURE_PURE_Aya_tscan
+  PLOT_LOSSES_AND_LR: True
+  DATA:
+    FS: 30
+    DATASET: PURE
+    DO_PREPROCESS: True               # if first time, should be true
+    DATA_FORMAT: NDCHW
+    DATA_PATH: "D:/PURE"                     # Raw dataset path, need to be updated
+    CACHED_PATH: "D:/rppg_cache"             # Processed dataset save path
+    EXP_DATA_NAME: ""
+    BEGIN: 0.0
+    END: 0.8
+    PREPROCESS:
+      DATA_TYPE: ['DiffNormalized','Standardized']
+      DATA_AUG: ['None']
+      LABEL_TYPE: DiffNormalized
+      DO_CHUNK: True
+      CHUNK_LENGTH: 180                # 6 sec @ 30 fps
+      CROP_FACE:
+        DO_CROP_FACE: True
+        BACKEND: 'HC'                  # HC for Haar Cascade, Y5F for YOLO5Face
+        USE_LARGE_FACE_BOX: True
+        LARGE_BOX_COEF: 1.5
+        DETECTION:
+          DO_DYNAMIC_DETECTION: False
+          DYNAMIC_DETECTION_FREQUENCY: 30
+          USE_MEDIAN_FACE_BOX: False
+      RESIZE:
+        H: 72
+        W: 72
+VALID:
+  DATA:
+    FS: 30
+    DATASET: PURE
+    DO_PREPROCESS: True
+    DATA_FORMAT: NDCHW
+    DATA_PATH: "D:/PURE"
+    CACHED_PATH: "D:/rppg_cache"
+    EXP_DATA_NAME: ""
+    BEGIN: 0.8
+    END: 1.0
+    PREPROCESS:
+      DATA_TYPE: ['DiffNormalized','Standardized']
+      LABEL_TYPE: DiffNormalized
+      DO_CHUNK: True
+      CHUNK_LENGTH: 180
+      CROP_FACE:
+        DO_CROP_FACE: True
+        BACKEND: 'HC'
+        USE_LARGE_FACE_BOX: True
+        LARGE_BOX_COEF: 1.5
+        DETECTION:
+          DO_DYNAMIC_DETECTION: False
+          DYNAMIC_DETECTION_FREQUENCY: 30
+          USE_MEDIAN_FACE_BOX: False
+      RESIZE:
+        H: 72
+        W: 72
+TEST:
+  METRICS: ['MAE', 'RMSE', 'MAPE', 'Pearson', 'SNR', 'BA']
+  USE_LAST_EPOCH: True                 # set False to use validation-best epoch
+  DATA:
+    FS: 50                             # Aya is 50 fps — DO NOT change to 30
+    DATASET: Aya
+    DO_PREPROCESS: True                # first run must be True (fresh cache)
+    DATA_FORMAT: NDCHW
+    DATA_PATH:   "E:/rppg_dataset"     # Aya raw data root
+    CACHED_PATH: "D:/PreprocessedTemp/Aya_for_PURE_model"   # NEW path, isolated
+    EXP_DATA_NAME: ""
+    BEGIN: 0.0
+    END: 1.0
+    PREPROCESS:
+      DATA_TYPE: ['DiffNormalized','Standardized']    # match PURE training
+      DATA_AUG: ['None']
+      LABEL_TYPE: DiffNormalized                      # match PURE training
+      DO_CHUNK: True
+      CHUNK_LENGTH: 300                # 6 sec @ 50 fps (matches PURE 180 @ 30)
+      CROP_FACE:
+        DO_CROP_FACE: True
+        BACKEND: 'HC'                  # match PURE training (NOT INSIGHT)
+        USE_LARGE_FACE_BOX: True
+        LARGE_BOX_COEF: 1.5
+        DETECTION:
+          DO_DYNAMIC_DETECTION: False
+          DYNAMIC_DETECTION_FREQUENCY: 30
+          USE_MEDIAN_FACE_BOX: False
+      RESIZE:
+        H: 72
+        W: 72
+DEVICE: cuda:0
+NUM_OF_GPU_TRAIN: 1
+LOG:
+  PATH: runs/pure
+MODEL:
+  DROP_RATE: 0.2
+  NAME: Tscan
+  TSCAN:
+    FRAME_DEPTH: 10                    # MUST match PURE training (NOT 20)
+INFERENCE:
+  BATCH_SIZE: 4
+  EVALUATION_METHOD: "FFT"             # "FFT" or "peak detection"
+  EVALUATION_WINDOW:
+    USE_SMALLER_WINDOW: False
+    WINDOW_SIZE: 10                    # In seconds
+  MODEL_PATH: "runs/pure\PURE_SizeW72_SizeH72_ClipLength180_DataTypeDiffNormalized_Standardized_DataAugNone_LabelTypeDiffNormalized_Crop_faceTrue_BackendHC_Large_boxTrue_Large_size1.5_Dyamic_DetFalse_det_len30_Median_face_boxFalse\PreTrainedModels\PURE_PURE_Aya_tscan_Epoch29.pth"
