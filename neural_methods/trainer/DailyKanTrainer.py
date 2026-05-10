@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import torch.optim as optim
 from evaluation.metrics import calculate_metrics
+from neural_methods.loss.FrequencyDomainLoss import FrequencyDomainLoss
 from neural_methods.loss.PhysNetNegPearsonLoss import Neg_Pearson
 from neural_methods.model.DailyKan import DailyKan
 from neural_methods.trainer.BaseTrainer import BaseTrainer
@@ -30,6 +31,9 @@ class DailyKanTrainer(BaseTrainer):
         in_channels = 3 * len(data_cfg.PREPROCESS.DATA_TYPE)
         frame_num = data_cfg.PREPROCESS.CHUNK_LENGTH
         self.chunk_len = frame_num
+        self.freq_loss_weight = float(getattr(config.MODEL.DAILYKAN, "FREQ_LOSS_WEIGHT", 0.2))
+        self.loss_model = Neg_Pearson()
+        self.freq_loss_model = FrequencyDomainLoss(fs=data_cfg.FS).to(self.device)
         self.model = DailyKan(
             in_channels=in_channels,
             frames=frame_num,
@@ -44,7 +48,6 @@ class DailyKanTrainer(BaseTrainer):
 
         if config.TOOLBOX_MODE == "train_and_test":
             self.num_train_batches = len(data_loader["train"])
-            self.loss_model = Neg_Pearson()
             self.optimizer = optim.AdamW(
                 self.model.parameters(),
                 lr=config.TRAIN.LR,
@@ -57,7 +60,7 @@ class DailyKanTrainer(BaseTrainer):
                 steps_per_epoch=self.num_train_batches,
             )
         elif config.TOOLBOX_MODE == "only_test":
-            self.loss_model = Neg_Pearson()
+            pass
         else:
             raise ValueError("DailyKan trainer initialized in incorrect toolbox mode!")
 
@@ -104,7 +107,9 @@ class DailyKanTrainer(BaseTrainer):
                 pred_ppg = self.model(frames, pose)
                 labels = self._normalize_signal(labels)
                 pred_ppg = self._normalize_signal(pred_ppg)
-                loss = self.loss_model(pred_ppg, labels)
+                time_loss = self.loss_model(pred_ppg, labels)
+                freq_loss = self.freq_loss_model(pred_ppg, labels)
+                loss = time_loss + self.freq_loss_weight * freq_loss
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -118,7 +123,11 @@ class DailyKanTrainer(BaseTrainer):
                 if idx % 100 == 99:
                     print(f"[{epoch}, {idx + 1:5d}] loss: {running_loss / 100:.3f}")
                     running_loss = 0.0
-                tbar.set_postfix(loss=loss.item())
+                tbar.set_postfix(
+                    loss=loss.item(),
+                    time=time_loss.item(),
+                    freq=freq_loss.item(),
+                )
 
             mean_training_losses.append(np.mean(train_loss))
             self.save_model(epoch)
@@ -153,9 +162,15 @@ class DailyKanTrainer(BaseTrainer):
                 pred_ppg = self.model(frames, pose)
                 labels = self._normalize_signal(labels)
                 pred_ppg = self._normalize_signal(pred_ppg)
-                loss = self.loss_model(pred_ppg, labels)
+                time_loss = self.loss_model(pred_ppg, labels)
+                freq_loss = self.freq_loss_model(pred_ppg, labels)
+                loss = time_loss + self.freq_loss_weight * freq_loss
                 valid_loss.append(loss.item())
-                vbar.set_postfix(loss=loss.item())
+                vbar.set_postfix(
+                    loss=loss.item(),
+                    time=time_loss.item(),
+                    freq=freq_loss.item(),
+                )
         return np.mean(np.asarray(valid_loss))
 
     def test(self, data_loader):

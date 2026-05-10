@@ -72,6 +72,51 @@ class KANPointwise3D(nn.Module):
         return x
 
 
+class TemporalDifferenceConv3D(nn.Module):
+    """Temporal central-difference 3D convolution for motion-robust features.
+
+    The effective operator is:
+        standard_conv(x) - sigmoid(theta) * central_difference_term(x)
+
+    This is equivalent to (1 - theta) * standard_conv + theta * CDC, where
+    CDC = standard_conv - central_difference_term.
+    """
+
+    def __init__(self, in_channels, out_channels, kernel_size=3, theta=0.5):
+        super().__init__()
+        if kernel_size % 2 != 1:
+            raise ValueError("TemporalDifferenceConv3D expects an odd kernel size.")
+        padding = kernel_size // 2
+        self.conv = nn.Conv3d(
+            in_channels,
+            out_channels,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=padding,
+            bias=False,
+        )
+        theta = min(max(theta, 1e-4), 1.0 - 1e-4)
+        self.theta_logit = nn.Parameter(torch.logit(torch.tensor(theta)))
+        self.norm = nn.BatchNorm3d(out_channels)
+        self.act = nn.SiLU(inplace=True)
+
+    def forward(self, x):
+        standard_out = self.conv(x)
+        theta = torch.sigmoid(self.theta_logit)
+        kernel_diff = self.conv.weight.sum(dim=(2, 3, 4), keepdim=True)
+        diff_out = F.conv3d(
+            x,
+            kernel_diff,
+            bias=None,
+            stride=self.conv.stride,
+            padding=0,
+            dilation=self.conv.dilation,
+            groups=self.conv.groups,
+        )
+        x = standard_out - theta * diff_out
+        return self.act(self.norm(x))
+
+
 class KANVideoBlock(nn.Module):
     """Spatial downsample plus KAN channel mixing."""
 
@@ -134,6 +179,27 @@ class PoseGuidedKANFusion(nn.Module):
         return refined + roi_feat
 
 
+class PoseSpatialAttention(nn.Module):
+    """Pose-guided channel-time attention before spatial pooling."""
+
+    def __init__(self, channels, pose_hidden=32, grid_size=8):
+        super().__init__()
+        self.pose_norm = nn.BatchNorm1d(3)
+        self.pose_gate = nn.Sequential(
+            KANLinear(3, pose_hidden, grid_size=grid_size),
+            nn.SiLU(),
+            KANLinear(pose_hidden, channels, grid_size=grid_size),
+        )
+
+    def forward(self, x, pose):
+        if pose.shape[-1] != x.shape[2]:
+            pose = F.interpolate(pose, size=x.shape[2], mode="linear", align_corners=False)
+        pose = self.pose_norm(pose).transpose(1, 2)
+        gate = torch.sigmoid(self.pose_gate(pose)).transpose(1, 2)
+        gate = gate.unsqueeze(-1).unsqueeze(-1)
+        return x + 0.5 * (gate * x - x)
+
+
 class KANTemporalHead(nn.Module):
     """Temporal smoothing and per-frame rPPG regression."""
 
@@ -164,11 +230,13 @@ class DailyKan(nn.Module):
         super().__init__()
         self.frames = frames
         self.stem = nn.Sequential(
+            TemporalDifferenceConv3D(in_channels, in_channels, kernel_size=3, theta=0.5),
             KANVideoBlock(in_channels, width, grid_size=grid_size, spatial_stride=2),
             KANVideoBlock(width, width * 2, grid_size=grid_size, spatial_stride=2),
             KANVideoBlock(width * 2, width * 2, grid_size=grid_size, spatial_stride=2),
         )
         self.spatial_pool = nn.AdaptiveAvgPool3d((frames, 1, 1))
+        self.pose_spatial_attention = PoseSpatialAttention(width * 2, pose_hidden, grid_size)
         self.fusion = PoseGuidedKANFusion(width * 2, pose_hidden, grid_size)
         self.dropout = nn.Dropout(dropout)
         self.head = KANTemporalHead(width * 2, grid_size)
@@ -184,6 +252,7 @@ class DailyKan(nn.Module):
             pose_angles = F.interpolate(pose_angles, size=t, mode="linear", align_corners=False)
 
         x = self.stem(frames)
+        x = self.pose_spatial_attention(x, pose_angles)
         if x.shape[2] != t:
             x = F.interpolate(x, size=(t, x.shape[3], x.shape[4]), mode="trilinear", align_corners=False)
         x = F.adaptive_avg_pool3d(x, (t, 1, 1)).view(b, -1, t)

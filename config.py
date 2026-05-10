@@ -338,6 +338,7 @@ _C.MODEL.DAILYKAN.WIDTH = 32
 _C.MODEL.DAILYKAN.GRID_SIZE = 8
 _C.MODEL.DAILYKAN.POSE_HIDDEN = 32
 _C.MODEL.DAILYKAN.WEIGHT_DECAY = 1e-4
+_C.MODEL.DAILYKAN.FREQ_LOSS_WEIGHT = 0.2
 
 # -----------------------------------------------------------------------------
 # Model Settings for BigSmall

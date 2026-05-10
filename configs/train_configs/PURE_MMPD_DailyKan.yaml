@@ -11,7 +11,7 @@ TRAIN:
   DATA:
     FS: 30
     DATASET: PURE
-    DO_PREPROCESS: True
+    DO_PREPROCESS: False
     DATA_FORMAT: NDCHW
     DATA_PATH: "D:/PURE"
     CACHED_PATH: "D:/rppg_cache_dailykan"
@@ -40,7 +40,7 @@ VALID:
   DATA:
     FS: 30
     DATASET: PURE
-    DO_PREPROCESS: True
+    DO_PREPROCESS: False
     DATA_FORMAT: NDCHW
     DATA_PATH: "D:/PURE"
     CACHED_PATH: "D:/rppg_cache_dailykan"
@@ -71,7 +71,7 @@ TEST:
   DATA:
     FS: 30
     DATASET: MMPD
-    DO_PREPROCESS: True
+    DO_PREPROCESS: False
     DATA_FORMAT: NDCHW
     DATA_PATH: "D:/MMPD"
     CACHED_PATH: "D:/rppg_cache_dailykan"
@@ -117,6 +117,7 @@ MODEL:
     GRID_SIZE: 8
     POSE_HIDDEN: 32
     WEIGHT_DECAY: 0.0001
+    FREQ_LOSS_WEIGHT: 0.2
 INFERENCE:
   BATCH_SIZE: 2
   EVALUATION_METHOD: "FFT"
