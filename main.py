@@ -85,6 +85,8 @@ def train_and_test(config, data_loader_dict):
         model_trainer = trainer.RhythmFormerTrainer.RhythmFormerTrainer(config, data_loader_dict)
     elif config.MODEL.NAME == 'DailyKan':
         model_trainer = trainer.DailyKanTrainer.DailyKanTrainer(config, data_loader_dict)
+    elif config.MODEL.NAME == 'LiquidPhys':
+        model_trainer = trainer.LiquidPhysTrainer.LiquidPhysTrainer(config, data_loader_dict)
 
     else:
         raise ValueError('Your Model is Not Supported  Yet!')
@@ -116,6 +118,8 @@ def test(config, data_loader_dict):
         model_trainer = trainer.RhythmFormerTrainer.RhythmFormerTrainer(config, data_loader_dict)
     elif config.MODEL.NAME == 'DailyKan':
         model_trainer = trainer.DailyKanTrainer.DailyKanTrainer(config, data_loader_dict)
+    elif config.MODEL.NAME == 'LiquidPhys':
+        model_trainer = trainer.LiquidPhysTrainer.LiquidPhysTrainer(config, data_loader_dict)
     else:
         raise ValueError('Your Model is Not Supported  Yet!')
     model_trainer.test(data_loader_dict)

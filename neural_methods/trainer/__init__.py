@@ -18,3 +18,4 @@ except Exception as e:
 import neural_methods.trainer.RhythmFormerTrainer
 import neural_methods.trainer.FactorizePhysTrainer
 import neural_methods.trainer.DailyKanTrainer
+import neural_methods.trainer.LiquidPhysTrainer

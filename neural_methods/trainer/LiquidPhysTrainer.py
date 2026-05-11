@@ -1,4 +1,4 @@
-"""Trainer for DailyKan."""
+"""Trainer for LiquidPhys."""
 
 import os
 
@@ -6,13 +6,14 @@ import numpy as np
 import torch
 import torch.optim as optim
 from evaluation.metrics import calculate_metrics
-from neural_methods.loss.HybridDailyKanLoss import HybridDailyKanLoss
-from neural_methods.model.DailyKan import DailyKan
+from neural_methods.loss.PhysNetNegPearsonLoss import Neg_Pearson
+from neural_methods.model.LiquidPhys import LiquidPhys
 from neural_methods.trainer.BaseTrainer import BaseTrainer
 from tqdm import tqdm
 
 
-class DailyKanTrainer(BaseTrainer):
+class LiquidPhysTrainer(BaseTrainer):
+    """Train, validate, and test the LiquidPhys model."""
 
     def __init__(self, config, data_loader):
         super().__init__()
@@ -28,28 +29,32 @@ class DailyKanTrainer(BaseTrainer):
 
         data_cfg = config.TRAIN.DATA if config.TOOLBOX_MODE == "train_and_test" else config.TEST.DATA
         in_channels = 3 * len(data_cfg.PREPROCESS.DATA_TYPE)
-        frame_num = data_cfg.PREPROCESS.CHUNK_LENGTH
-        self.chunk_len = frame_num
-        freq_weight = float(getattr(config.MODEL.DAILYKAN, "FREQ_LOSS_WEIGHT", 0.2))
-        self.loss_model = HybridDailyKanLoss(fs=data_cfg.FS, w_freq=freq_weight).to(self.device)
-        self.model = DailyKan(
+        self.chunk_len = data_cfg.PREPROCESS.CHUNK_LENGTH
+        self.frame_rate = data_cfg.FS
+        self.freq_loss_weight = config.MODEL.LIQUIDPHYS.FREQ_LOSS_WEIGHT
+        motion_dim = 3 + config.MODEL.LIQUIDPHYS.FLOW_DIM
+
+        self.model = LiquidPhys(
             in_channels=in_channels,
-            frames=frame_num,
-            width=config.MODEL.DAILYKAN.WIDTH,
-            grid_size=config.MODEL.DAILYKAN.GRID_SIZE,
-            pose_hidden=config.MODEL.DAILYKAN.POSE_HIDDEN,
+            embed_dim=config.MODEL.LIQUIDPHYS.EMBED_DIM,
+            hidden_dim=config.MODEL.LIQUIDPHYS.HIDDEN_DIM,
+            motion_dim=motion_dim,
+            motion_embed_dim=config.MODEL.LIQUIDPHYS.MOTION_EMBED_DIM,
             dropout=config.MODEL.DROP_RATE,
+            cfc_mode=config.MODEL.LIQUIDPHYS.CFC_MODE,
+            mixed_memory=config.MODEL.LIQUIDPHYS.MIXED_MEMORY,
         ).to(self.device)
         self.model = torch.nn.DataParallel(
             self.model, device_ids=list(range(config.NUM_OF_GPU_TRAIN))
         )
+        self.criterion_pearson = Neg_Pearson()
 
         if config.TOOLBOX_MODE == "train_and_test":
             self.num_train_batches = len(data_loader["train"])
             self.optimizer = optim.AdamW(
                 self.model.parameters(),
                 lr=config.TRAIN.LR,
-                weight_decay=config.MODEL.DAILYKAN.WEIGHT_DECAY,
+                weight_decay=config.MODEL.LIQUIDPHYS.WEIGHT_DECAY,
             )
             self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
                 self.optimizer,
@@ -60,24 +65,21 @@ class DailyKanTrainer(BaseTrainer):
         elif config.TOOLBOX_MODE == "only_test":
             pass
         else:
-            raise ValueError("DailyKan trainer initialized in incorrect toolbox mode!")
+            raise ValueError("LiquidPhys trainer initialized in incorrect toolbox mode!")
 
     @staticmethod
     def _unpack_batch(batch, device):
-        if len(batch) < 5:
+        if len(batch) < 6:
             raise ValueError(
-                "DailyKan requires pose angles. Preprocess with "
-                "PREPROCESS.CROP_FACE.BACKEND: 'INSIGHT' so *_pose*.npy files are created."
+                "LiquidPhys requires pose and optical-flow features. Preprocess with "
+                "PREPROCESS.USE_POSE: True, PREPROCESS.USE_OPTICAL_FLOW: True, "
+                "and CROP_FACE.BACKEND: 'INSIGHT'."
             )
         frames = batch[0].to(torch.float32).to(device)
         labels = batch[1].to(torch.float32).to(device)
         pose = batch[4].to(torch.float32).to(device)
-        # BaseLoader NDCHW returns [B,T,C,H,W]; DailyKan expects [B,C,T,H,W].
-        if frames.ndim == 5 and frames.shape[2] in (3, 6, 9):
-            frames = frames.permute(0, 2, 1, 3, 4).contiguous()
-        if pose.ndim == 3 and pose.shape[1] != 3 and pose.shape[2] == 3:
-            pose = pose.permute(0, 2, 1).contiguous()
-        return frames, labels, pose
+        flow = batch[5].to(torch.float32).to(device)
+        return frames, labels, pose, flow
 
     @staticmethod
     def _normalize_signal(x):
@@ -85,10 +87,38 @@ class DailyKanTrainer(BaseTrainer):
         std = torch.std(x, dim=-1, keepdim=True).clamp_min(1e-6)
         return (x - mean) / std
 
+    def _band_psd_distribution(self, x):
+        x = x - torch.mean(x, dim=-1, keepdim=True)
+        window = torch.hann_window(x.shape[-1], dtype=x.dtype, device=x.device)
+        psd = torch.fft.rfft(x * window, dim=-1).abs().pow(2)
+        freqs = torch.fft.rfftfreq(x.shape[-1], d=1.0 / float(self.frame_rate)).to(x.device)
+        mask = (freqs >= 0.7) & (freqs <= 3.0)
+        psd = psd[:, mask]
+        return psd / psd.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+
+    def _frequency_kl_loss(self, pred, label):
+        pred_psd = self._band_psd_distribution(pred)
+        label_psd = self._band_psd_distribution(label)
+        kl_pred_label = pred_psd * (torch.log(pred_psd + 1e-8) - torch.log(label_psd + 1e-8))
+        kl_label_pred = label_psd * (torch.log(label_psd + 1e-8) - torch.log(pred_psd + 1e-8))
+        return torch.mean(0.5 * (kl_pred_label.sum(dim=-1) + kl_label_pred.sum(dim=-1)))
+
+    def _compute_loss(self, pred_ppg, labels):
+        labels = self._normalize_signal(labels)
+        pred_ppg = self._normalize_signal(pred_ppg)
+        pearson = self.criterion_pearson(pred_ppg, labels)
+        freq = self._frequency_kl_loss(pred_ppg, labels)
+        total = pearson + self.freq_loss_weight * freq
+        return total, {"pearson": pearson.detach(), "freq": freq.detach(), "total": total.detach()}
+
     def diagnose_batch(self, batch):
-        frames, labels, pose = self._unpack_batch(batch, self.device)
+        frames, labels, pose, flow = self._unpack_batch(batch, self.device)
         model = self.model.module if hasattr(self.model, "module") else self.model
-        return model.diagnose(frames, pose)
+        shapes = model.diagnose(frames, pose, flow)
+        pred = self.model(frames, pose, flow)
+        shapes["label"] = tuple(labels.shape)
+        shapes["pred_runtime"] = tuple(pred.shape)
+        return shapes
 
     def train(self, data_loader):
         if data_loader["train"] is None:
@@ -102,28 +132,13 @@ class DailyKanTrainer(BaseTrainer):
             print(f"====Training Epoch: {epoch}====")
             train_loss = []
             running_loss = 0.0
-            consecutive_collapsed_batches = 0
             self.model.train()
             tbar = tqdm(data_loader["train"], ncols=80)
             for idx, batch in enumerate(tbar):
                 tbar.set_description("Train epoch %s" % epoch)
-                frames, labels, pose = self._unpack_batch(batch, self.device)
-                pred_ppg = self.model(frames, pose)
-                labels = self._normalize_signal(labels)
-                pred_ppg = self._normalize_signal(pred_ppg)
-                loss, parts = self.loss_model(pred_ppg, labels)
-
-                pred_std = torch.std(pred_ppg, unbiased=False).item()
-                if pred_std < 1e-3:
-                    consecutive_collapsed_batches += 1
-                else:
-                    consecutive_collapsed_batches = 0
-                if consecutive_collapsed_batches > 5:
-                    print(
-                        "WARNING: DailyKan collapse detector triggered: "
-                        f"pred_ppg.std()={pred_std:.6f} for "
-                        f"{consecutive_collapsed_batches} consecutive batches."
-                    )
+                frames, labels, pose, flow = self._unpack_batch(batch, self.device)
+                pred_ppg = self.model(frames, pose, flow)
+                loss, parts = self._compute_loss(pred_ppg, labels)
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -140,14 +155,8 @@ class DailyKanTrainer(BaseTrainer):
                 tbar.set_postfix(
                     loss=loss.item(),
                     pearson=float(parts["pearson"]),
-                    var=float(parts["var"]),
-                    snr=float(parts["snr"]),
-                    total=float(parts["total"]),
+                    freq=float(parts["freq"]),
                 )
-                if idx % 50 == 0:
-                    print(f"pred std: {pred_ppg.std().item():.4f}, "
-                          f"label std: {labels.std().item():.4f}, "
-                          f"pred range: [{pred_ppg.min().item():.3f}, {pred_ppg.max().item():.3f}]")
 
             mean_training_losses.append(np.mean(train_loss))
             self.save_model(epoch)
@@ -178,18 +187,14 @@ class DailyKanTrainer(BaseTrainer):
             vbar = tqdm(data_loader["valid"], ncols=80)
             for valid_batch in vbar:
                 vbar.set_description("Validation")
-                frames, labels, pose = self._unpack_batch(valid_batch, self.device)
-                pred_ppg = self.model(frames, pose)
-                labels = self._normalize_signal(labels)
-                pred_ppg = self._normalize_signal(pred_ppg)
-                loss, parts = self.loss_model(pred_ppg, labels)
+                frames, labels, pose, flow = self._unpack_batch(valid_batch, self.device)
+                pred_ppg = self.model(frames, pose, flow)
+                loss, parts = self._compute_loss(pred_ppg, labels)
                 valid_loss.append(loss.item())
                 vbar.set_postfix(
                     loss=loss.item(),
                     pearson=float(parts["pearson"]),
-                    var=float(parts["var"]),
-                    snr=float(parts["snr"]),
-                    total=float(parts["total"]),
+                    freq=float(parts["freq"]),
                 )
         return np.mean(np.asarray(valid_loss))
 
@@ -199,16 +204,14 @@ class DailyKanTrainer(BaseTrainer):
 
         print("")
         print("===Testing===")
-        self.chunk_len = self.config.TEST.DATA.PREPROCESS.CHUNK_LENGTH
         predictions = dict()
         labels = dict()
 
         if self.config.TOOLBOX_MODE == "only_test":
             if not os.path.exists(self.config.INFERENCE.MODEL_PATH):
                 raise ValueError("Inference model path error! Please check INFERENCE.MODEL_PATH in your yaml.")
-            self.model.load_state_dict(torch.load(self.config.INFERENCE.MODEL_PATH))
+            model_path = self.config.INFERENCE.MODEL_PATH
             print("Testing uses pretrained model!")
-            print(self.config.INFERENCE.MODEL_PATH)
         else:
             if self.config.TEST.USE_LAST_EPOCH:
                 model_path = os.path.join(
@@ -222,8 +225,8 @@ class DailyKanTrainer(BaseTrainer):
                     self.model_file_name + "_Epoch" + str(self.best_epoch) + ".pth",
                 )
                 print("Testing uses best epoch selected using model selection as non-pretrained model!")
-            print(model_path)
-            self.model.load_state_dict(torch.load(model_path))
+        print(model_path)
+        self.model.load_state_dict(torch.load(model_path, map_location=self.device))
 
         self.model = self.model.to(self.config.DEVICE)
         self.model.eval()
@@ -231,8 +234,8 @@ class DailyKanTrainer(BaseTrainer):
         with torch.no_grad():
             for _, test_batch in enumerate(tqdm(data_loader["test"], ncols=80)):
                 batch_size = test_batch[0].shape[0]
-                frames, label, pose = self._unpack_batch(test_batch, self.config.DEVICE)
-                pred_ppg_test = self.model(frames, pose)
+                frames, label, pose, flow = self._unpack_batch(test_batch, self.config.DEVICE)
+                pred_ppg_test = self.model(frames, pose, flow)
 
                 if self.config.TEST.OUTPUT_SAVE_DIR:
                     label = label.cpu()

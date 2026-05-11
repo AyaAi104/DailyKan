@@ -1,6 +1,6 @@
 BASE: ['']
-#python main.py --config_file ./configs/train_configs/PURE_PURE_MMPD_TSCAN_BASIC.yaml
-TOOLBOX_MODE: "train_and_test"      # "train_and_test"  or "only_test"
+#python main.py --config_file ./configs/infer_configs/PURE_PURE_MMPD_TSCAN_Test.yaml
+TOOLBOX_MODE: "only_test"      # "train_and_test"  or "only_test"
 TRAIN:
   BATCH_SIZE: 4
   EPOCHS: 30
@@ -10,7 +10,7 @@ TRAIN:
   DATA:
     FS: 30
     DATASET: PURE
-    DO_PREPROCESS: True               # if first time, should be true
+    DO_PREPROCESS: False              # if first time, should be true
     DATA_FORMAT: NDCHW
     DATA_PATH: "D:/PURE"                     # Raw dataset path, need to be updated
     CACHED_PATH: "D:\PreprocessedData"    # Processed dataset save path, need to be updated
@@ -39,7 +39,7 @@ VALID:
   DATA:
     FS: 30
     DATASET: PURE
-    DO_PREPROCESS: True                   # if first time, should be true
+    DO_PREPROCESS: False                   # if first time, should be true
     DATA_FORMAT: NDCHW
     DATA_PATH: "D:/PURE"                      # Raw dataset path, need to be updated
     CACHED_PATH: "D:\PreprocessedData"    # Processed dataset save path, need to be updated
@@ -78,7 +78,7 @@ TEST:
       MAKEUP: [1, 2] # 1 - True, 2 - False
     FS: 30
     DATASET: MMPD
-    DO_PREPROCESS: True                   # if first time, should be true
+    DO_PREPROCESS: True                  # if first time, should be true
     DATA_FORMAT: NDCHW
     DATA_PATH:   "D:/MMPD"         # Raw dataset path, need to be updated
     CACHED_PATH: "D:\PreprocessedData"      # Processed dataset save path, need to be updated
@@ -117,4 +117,4 @@ INFERENCE:
   EVALUATION_WINDOW:
     USE_SMALLER_WINDOW: False        # Change this if you'd like an evaluation window smaller than the test video length
     WINDOW_SIZE: 10        # In seconds
-  MODEL_PATH:   ""
+  MODEL_PATH:   "runs/pure\PURE_SizeW72_SizeH72_ClipLength180_DataTypeDiffNormalized_Standardized_DataAugNone_LabelTypeDiffNormalized_Crop_faceTrue_BackendHC_Large_boxTrue_Large_size1.5_Dyamic_DetFalse_det_len30_Median_face_boxFalse\PreTrainedModels\PURE_PURE_MMPD_tscan_Epoch29.pth"

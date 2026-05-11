@@ -1,24 +1,26 @@
 BASE: ['']
-# python main.py --config_file ./configs/infer_configs/PURE_MMPD_DailyKan.yaml
+# python main.py --config_file ./configs/train_configs/PURE_PURE_MMPD_LIQUID_RPPG.yaml
 
-TOOLBOX_MODE: "only_test"
+TOOLBOX_MODE: "train_and_test"
 TRAIN:
-  BATCH_SIZE: 2
+  BATCH_SIZE: 4
   EPOCHS: 30
-  LR: 0.001
-  MODEL_FILE_NAME: PURE_PURE_MMPD_DailyKan
+  LR: 0.0005
+  MODEL_FILE_NAME: PURE_PURE_MMPD_LiquidPhys
   PLOT_LOSSES_AND_LR: True
   DATA:
     FS: 30
     DATASET: PURE
-    DO_PREPROCESS: True
+    DO_PREPROCESS: False
     DATA_FORMAT: NDCHW
     DATA_PATH: "D:/PURE"
-    CACHED_PATH: "D:/rppg_cache_dailykan"
-    EXP_DATA_NAME: ""
+    CACHED_PATH: "D:/PURE_cached"
+    EXP_DATA_NAME: "PURE_SizeW72_SizeH72_ClipLength180_DataTypeDiffNormalized_Standardized_DataAugNone_LabelTypeDiffNormalized_Crop_faceTrue_BackendINSIGHT_Large_boxTrue_Large_size1.35_Dyamic_DetTrue_det_len1_Median_face_boxFalse_PoseTrue_FlowTrue"
     BEGIN: 0.0
     END: 0.8
     PREPROCESS:
+      USE_POSE: True
+      USE_OPTICAL_FLOW: True
       DATA_TYPE: ['DiffNormalized', 'Standardized']
       DATA_AUG: ['None']
       LABEL_TYPE: DiffNormalized
@@ -40,14 +42,16 @@ VALID:
   DATA:
     FS: 30
     DATASET: PURE
-    DO_PREPROCESS: True
+    DO_PREPROCESS: False
     DATA_FORMAT: NDCHW
     DATA_PATH: "D:/PURE"
-    CACHED_PATH: "D:/rppg_cache_dailykan"
-    EXP_DATA_NAME: ""
+    CACHED_PATH: "D:/PURE_cached"
+    EXP_DATA_NAME: "PURE_SizeW72_SizeH72_ClipLength180_DataTypeDiffNormalized_Standardized_DataAugNone_LabelTypeDiffNormalized_Crop_faceTrue_BackendINSIGHT_Large_boxTrue_Large_size1.35_Dyamic_DetTrue_det_len1_Median_face_boxFalse_PoseTrue_FlowTrue"
     BEGIN: 0.8
     END: 1.0
     PREPROCESS:
+      USE_POSE: True
+      USE_OPTICAL_FLOW: True
       DATA_TYPE: ['DiffNormalized', 'Standardized']
       DATA_AUG: ['None']
       LABEL_TYPE: DiffNormalized
@@ -71,11 +75,11 @@ TEST:
   DATA:
     FS: 30
     DATASET: MMPD
-    DO_PREPROCESS: False
+    DO_PREPROCESS: True
     DATA_FORMAT: NDCHW
     DATA_PATH: "D:/MMPD"
-    CACHED_PATH: "D:/rppg_cache_dailykan"
-    EXP_DATA_NAME: ""
+    CACHED_PATH: "D:/MMPD_cached"
+    EXP_DATA_NAME: "MMPD_SizeW72_SizeH72_ClipLength180_DataTypeDiffNormalized_Standardized_DataAugNone_LabelTypeDiffNormalized_Crop_faceTrue_BackendINSIGHT_Large_boxTrue_Large_size1.35_Dyamic_DetTrue_det_len1_Median_face_boxFalse_PoseTrue_FlowTrue"
     BEGIN: 0.0
     END: 1.0
     INFO:
@@ -88,6 +92,8 @@ TEST:
       HAIR_COVER: [1, 2]
       MAKEUP: [1, 2]
     PREPROCESS:
+      USE_POSE: True
+      USE_OPTICAL_FLOW: True
       DATA_TYPE: ['DiffNormalized', 'Standardized']
       DATA_AUG: ['None']
       LABEL_TYPE: DiffNormalized
@@ -108,19 +114,23 @@ TEST:
 DEVICE: cuda:0
 NUM_OF_GPU_TRAIN: 1
 LOG:
-  PATH: runs/dailykan
+  PATH: runs/liquidphys
 MODEL:
   DROP_RATE: 0.1
-  NAME: DailyKan
-  DAILYKAN:
-    WIDTH: 32
-    GRID_SIZE: 8
-    POSE_HIDDEN: 32
+  NAME: LiquidPhys
+  LIQUIDPHYS:
+    EMBED_DIM: 64
+    HIDDEN_DIM: 64
+    MOTION_EMBED_DIM: 16
+    FLOW_DIM: 7
+    CFC_MODE: "default"
+    MIXED_MEMORY: False
     WEIGHT_DECAY: 0.0001
+    FREQ_LOSS_WEIGHT: 0.2
 INFERENCE:
-  BATCH_SIZE: 2
+  BATCH_SIZE: 4
   EVALUATION_METHOD: "FFT"
   EVALUATION_WINDOW:
     USE_SMALLER_WINDOW: False
     WINDOW_SIZE: 10
-  MODEL_PATH: "runs/dailykan/PURE_SizeW72_SizeH72_ClipLength180_DataTypeDiffNormalized_Standardized_DataAugNone_LabelTypeDiffNormalized_Crop_faceTrue_BackendINSIGHT_Large_boxTrue_Large_size1.35_Dyamic_DetTrue_det_len1_Median_face_boxFalse/PreTrainedModels/PURE_PURE_MMPD_DailyKan_Epoch12.pth"
+  MODEL_PATH: ""

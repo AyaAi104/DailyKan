@@ -22,7 +22,7 @@ class KANLinear(nn.Module):
     outputs are mixed into the target features.
     """
 
-    def __init__(self, in_features, out_features, grid_size=8, grid_range=(-2.0, 2.0),
+    def __init__(self, in_features, out_features, grid_size=8, grid_range=(-3.0, 3.0),
                  base_activation=nn.SiLU, bias=True):
         super().__init__()
         self.in_features = in_features
@@ -33,6 +33,7 @@ class KANLinear(nn.Module):
         self.register_buffer("grid", grid)
         self.inv_denom = 1.0 / ((grid[1] - grid[0]).item() + 1e-6)
 
+        self.input_norm = nn.LayerNorm(in_features)
         self.base = nn.Linear(in_features, out_features, bias=bias)
         self.spline_weight = nn.Parameter(
             torch.empty(out_features, in_features, grid_size)
@@ -49,6 +50,7 @@ class KANLinear(nn.Module):
     def forward(self, x):
         original_shape = x.shape[:-1]
         x_flat = x.reshape(-1, self.in_features)
+        x_flat = self.input_norm(x_flat)
         base_out = self.base(self.activation(x_flat))
 
         basis = torch.exp(-((x_flat.unsqueeze(-1) - self.grid) * self.inv_denom) ** 2)
@@ -154,7 +156,7 @@ class PoseKANEncoder(nn.Module):
         gamma, beta, gate = torch.chunk(params, 3, dim=-1)
         gamma = torch.tanh(gamma).transpose(1, 2)
         beta = beta.transpose(1, 2)
-        gate = torch.sigmoid(gate).transpose(1, 2)
+        gate = torch.sigmoid(gate + 4.0).transpose(1, 2)
         return gamma, beta, gate
 
 
@@ -173,7 +175,7 @@ class PoseGuidedKANFusion(nn.Module):
     def forward(self, roi_feat, pose):
         # roi_feat: [B, C, T]
         gamma, beta, gate = self.pose_encoder(pose)
-        modulated = roi_feat * (1.0 + 0.5 * gamma) + 0.1 * beta
+        modulated = roi_feat * (1.0 + 0.1 * gamma) + 0.05 * beta
         suppressed = modulated * gate
         refined = self.refine(suppressed.transpose(1, 2)).transpose(1, 2)
         return refined + roi_feat
@@ -195,7 +197,7 @@ class PoseSpatialAttention(nn.Module):
         if pose.shape[-1] != x.shape[2]:
             pose = F.interpolate(pose, size=x.shape[2], mode="linear", align_corners=False)
         pose = self.pose_norm(pose).transpose(1, 2)
-        gate = torch.sigmoid(self.pose_gate(pose)).transpose(1, 2)
+        gate = torch.sigmoid(self.pose_gate(pose) + 4.0).transpose(1, 2)
         gate = gate.unsqueeze(-1).unsqueeze(-1)
         return x + 0.5 * (gate * x - x)
 
@@ -260,3 +262,70 @@ class DailyKan(nn.Module):
         x = self.dropout(x)
         rppg = self.head(x)
         return rppg
+
+    @staticmethod
+    def _stats(x):
+        x = x.detach()
+        return (
+            float(x.mean().cpu()),
+            float(x.std(unbiased=False).cpu()),
+            float(x.min().cpu()),
+            float(x.max().cpu()),
+        )
+
+    def diagnose(self, frames, pose):
+        """Run one diagnostic forward pass and return activation statistics."""
+        basis_alive_fracs = []
+        handles = []
+
+        def kan_pre_hook(module, inputs):
+            x = inputs[0].detach()
+            x_flat = x.reshape(-1, module.in_features)
+            if x_flat.shape[0] > 100000:
+                step = max(1, x_flat.shape[0] // 100000)
+                x_flat = x_flat[::step]
+            x_flat = module.input_norm(x_flat)
+            basis = torch.exp(-((x_flat.unsqueeze(-1) - module.grid) * module.inv_denom) ** 2)
+            basis_alive_fracs.append((basis > 0.05).float().mean().detach())
+
+        for module in self.modules():
+            if isinstance(module, KANLinear):
+                handles.append(module.register_forward_pre_hook(kan_pre_hook))
+
+        try:
+            with torch.no_grad():
+                b, _, t, _, _ = frames.shape
+                pose_work = pose
+                if pose_work.shape[-1] != t:
+                    pose_work = F.interpolate(pose_work, size=t, mode="linear", align_corners=False)
+
+                x = self.stem(frames)
+                stem_out_stats = self._stats(x)
+                x = self.pose_spatial_attention(x, pose_work)
+                after_pose_spatial = self._stats(x)
+                if x.shape[2] != t:
+                    x = F.interpolate(x, size=(t, x.shape[3], x.shape[4]),
+                                      mode="trilinear", align_corners=False)
+                x = F.adaptive_avg_pool3d(x, (t, 1, 1)).view(b, -1, t)
+                after_pool = self._stats(x)
+                x = self.fusion(x, pose_work)
+                after_fusion = self._stats(x)
+                x = self.dropout(x)
+                pred = self.head(x)
+                pred_stats = self._stats(pred)
+
+            if basis_alive_fracs:
+                kan_basis_alive_frac = float(torch.stack(basis_alive_fracs).mean().cpu())
+            else:
+                kan_basis_alive_frac = 0.0
+            return {
+                "stem_out_stats": stem_out_stats,
+                "after_pose_spatial": after_pose_spatial,
+                "after_pool": after_pool,
+                "after_fusion": after_fusion,
+                "kan_basis_alive_frac": kan_basis_alive_frac,
+                "pred_stats": pred_stats,
+            }
+        finally:
+            for handle in handles:
+                handle.remove()

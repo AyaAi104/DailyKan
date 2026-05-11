@@ -38,7 +38,7 @@ def power2db(mag):
     return 10 * np.log10(mag)
 
 # modify $1, find final peek here:
-def _calculate_fft_hr(ppg_signal, fs=60, low_pass=0.80, high_pass=1.667):
+def _calculate_fft_hr(ppg_signal, fs=60, low_pass=0.60, high_pass=3.33):
     # Note: to more closely match results in the NeurIPS 2023 toolbox paper,
     # we recommend low_pass=0.75 and high_pass=2.5 instead of the defaults above.
     """Calculate heart rate based on PPG using Fast Fourier transform (FFT)."""

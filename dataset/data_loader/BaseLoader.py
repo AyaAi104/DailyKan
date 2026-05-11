@@ -59,6 +59,7 @@ class BaseLoader(Dataset):
         self.labels = list()
         self.pose_paths = list()
         self._last_pose_clips = None
+        self._last_flow_clips = None
         self.face_analyzer = None
         self.dataset_name = dataset_name
         self.raw_data_path = raw_data_path
@@ -109,7 +110,9 @@ class BaseLoader(Dataset):
         data = np.load(self.inputs[index])
         label = np.load(self.labels[index])
         pose_path = self.inputs[index].replace("input", "pose")
+        flow_path = self.inputs[index].replace("input", "flow")
         pose = None
+        flow = None
         if os.path.exists(pose_path):
             pose = np.load(pose_path)
             if pose.ndim != 2:
@@ -118,6 +121,12 @@ class BaseLoader(Dataset):
                 pose = np.transpose(pose, (1, 0))
             elif pose.shape[0] != 3:
                 raise ValueError(f"Pose file must contain yaw/pitch/roll, got {pose.shape}: {pose_path}")
+        if os.path.exists(flow_path):
+            flow = np.load(flow_path)
+            if flow.ndim != 2:
+                raise ValueError(f"Flow file must be 2-D [T,K] or [K,T], got {flow.shape}: {flow_path}")
+            if flow.shape[0] == data.shape[0]:
+                flow = np.transpose(flow, (1, 0))
         if self.data_format == 'NDCHW':
             data = np.transpose(data, (0, 3, 1, 2))
         elif self.data_format == 'NCDHW':
@@ -142,8 +151,12 @@ class BaseLoader(Dataset):
         # chunk_id is the extracted, numeric chunk identifier. Following the previous comments, 
         # the chunk_id for example would be 0
         chunk_id = item_path_filename[split_idx + 6:].split('.')[0]
+        if pose is not None and flow is not None:
+            return data, label, filename, chunk_id, np.float32(pose), np.float32(flow)
         if pose is not None:
             return data, label, filename, chunk_id, np.float32(pose)
+        if flow is not None:
+            return data, label, filename, chunk_id, np.float32(flow)
         return data, label, filename, chunk_id
 
     def get_raw_data(self, raw_data_path):
@@ -255,7 +268,10 @@ class BaseLoader(Dataset):
         """
         # resize frames and crop for face region
         self._last_pose_clips = None
-        if config_preprocess.CROP_FACE.BACKEND == "INSIGHT":
+        self._last_flow_clips = None
+        use_pose = bool(getattr(config_preprocess, "USE_POSE", False)) or config_preprocess.CROP_FACE.BACKEND == "INSIGHT"
+        use_optical_flow = bool(getattr(config_preprocess, "USE_OPTICAL_FLOW", False))
+        if use_pose:
             frames, pose_angles = self.crop_face_resize_with_pose(
                 frames,
                 config_preprocess.CROP_FACE.DO_CROP_FACE,
@@ -263,6 +279,7 @@ class BaseLoader(Dataset):
                 config_preprocess.CROP_FACE.LARGE_BOX_COEF,
                 config_preprocess.RESIZE.W,
                 config_preprocess.RESIZE.H)
+            pose_angles = self.interpolate_missing_pose(pose_angles)
         else:
             pose_angles = None
             frames = self.crop_face_resize(
@@ -276,6 +293,7 @@ class BaseLoader(Dataset):
                 config_preprocess.CROP_FACE.DETECTION.USE_MEDIAN_FACE_BOX,
                 config_preprocess.RESIZE.W,
                 config_preprocess.RESIZE.H)
+        flow_features = self.extract_optical_flow_features(frames) if use_optical_flow else None
         # Check data transformation type
         data = list()  # Video data
         for data_type in config_preprocess.DATA_TYPE:
@@ -305,25 +323,35 @@ class BaseLoader(Dataset):
                 _, pose_clips = self.chunk(
                     data, pose_angles, config_preprocess.CHUNK_LENGTH)
                 self._last_pose_clips = pose_clips
+            if flow_features is not None:
+                _, flow_clips = self.chunk(
+                    data, flow_features, config_preprocess.CHUNK_LENGTH)
+                self._last_flow_clips = flow_clips
         else:
             frames_clips = np.array([data])
             bvps_clips = np.array([bvps])
             if pose_angles is not None:
                 self._last_pose_clips = np.array([pose_angles])
+            if flow_features is not None:
+                self._last_flow_clips = np.array([flow_features])
 
         return frames_clips, bvps_clips
 
     def _get_face_analyzer(self):
         """Lazily initialize InsightFace in the current process."""
         if self.face_analyzer is None:
-            if os.name == "nt":
+            # ONNXRuntime-GPU can emit a noisy LoadLibrary error on Windows
+            # when CUDA/cuDNN provider DLL dependencies are missing. Use CPU
+            # by default and allow CUDA opt-in once the local ORT GPU install
+            # is known-good.
+            use_ort_cuda = os.environ.get("RPPG_USE_ONNXRUNTIME_CUDA", "").lower() in ("1", "true", "yes")
+            if os.name == "nt" and use_ort_cuda:
                 torch_lib_dir = os.path.join(os.path.dirname(torch.__file__), "lib")
                 if os.path.isdir(torch_lib_dir):
                     os.add_dll_directory(torch_lib_dir)
+                    os.environ["PATH"] = torch_lib_dir + os.pathsep + os.environ.get("PATH", "")
             import insightface
-            # Prefer GPU when available; ONNXRuntime falls back to CPU if CUDA
-            # cannot be loaded in the current environment.
-            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if use_ort_cuda else ['CPUExecutionProvider']
             self.face_analyzer = insightface.app.FaceAnalysis(
                 name='buffalo_l',
                 providers=providers,
@@ -351,6 +379,78 @@ class BaseLoader(Dataset):
         return np.zeros(3, dtype=np.float32)
 
     @staticmethod
+    def interpolate_missing_pose(pose_angles):
+        """Linearly interpolate missing yaw/pitch/roll rows marked as NaN."""
+        pose_angles = np.asarray(pose_angles, dtype=np.float32)
+        valid = np.isfinite(pose_angles).all(axis=1)
+        if valid.all():
+            return pose_angles
+        missing_count = int((~valid).sum())
+        print(f"WARNING: Interpolating pose for {missing_count} frames with no InsightFace detection.")
+        frame_idx = np.arange(pose_angles.shape[0])
+        if not valid.any():
+            pose_angles[:] = 0.0
+            return pose_angles
+        for axis in range(pose_angles.shape[1]):
+            pose_angles[:, axis] = np.interp(
+                frame_idx,
+                frame_idx[valid],
+                pose_angles[valid, axis],
+            )
+        return pose_angles
+
+    @staticmethod
+    def extract_optical_flow_features(frames):
+        """Compute compact Farneback optical-flow features for cropped face frames.
+
+        The returned array has shape [T, 7]:
+        mean magnitude, magnitude std, dominant angle, forehead magnitude,
+        left-cheek magnitude, right-cheek magnitude, and valid-motion fraction.
+        """
+        frames = np.asarray(frames)
+        total_frames, height, width, _ = frames.shape
+        features = np.zeros((total_frames, 7), dtype=np.float32)
+        if total_frames < 2:
+            return features
+
+        prev_gray = cv2.cvtColor(frames[0][:, :, :3].astype(np.uint8), cv2.COLOR_RGB2GRAY)
+        regions = (
+            (slice(0, max(1, height // 3)), slice(width // 4, max(width // 4 + 1, 3 * width // 4))),
+            (slice(height // 3, max(height // 3 + 1, 5 * height // 6)), slice(0, max(1, width // 2))),
+            (slice(height // 3, max(height // 3 + 1, 5 * height // 6)), slice(width // 2, width)),
+        )
+        for i in range(1, total_frames):
+            gray = cv2.cvtColor(frames[i][:, :, :3].astype(np.uint8), cv2.COLOR_RGB2GRAY)
+            flow = cv2.calcOpticalFlowFarneback(
+                prev_gray,
+                gray,
+                None,
+                pyr_scale=0.5,
+                levels=3,
+                winsize=15,
+                iterations=3,
+                poly_n=5,
+                poly_sigma=1.2,
+                flags=0,
+            )
+            mag, ang = cv2.cartToPolar(flow[..., 0], flow[..., 1], angleInDegrees=False)
+            mean_mag = float(np.mean(mag))
+            std_mag = float(np.std(mag))
+            if np.sum(mag) > 1e-8:
+                dominant_angle = float(np.arctan2(np.sum(np.sin(ang) * mag), np.sum(np.cos(ang) * mag)))
+            else:
+                dominant_angle = 0.0
+            region_mags = [float(np.mean(mag[r])) if mag[r].size else 0.0 for r in regions]
+            valid_motion_fraction = float(np.mean(mag > 1e-3))
+            features[i] = np.asarray(
+                [mean_mag, std_mag, dominant_angle] + region_mags + [valid_motion_fraction],
+                dtype=np.float32,
+            )
+            prev_gray = gray
+        features[0] = features[1]
+        return features
+
+    @staticmethod
     def _square_face_box_from_insightface(face):
         x_min, y_min, x_max, y_max = face.bbox.astype(int)
         width = x_max - x_min
@@ -375,7 +475,6 @@ class BaseLoader(Dataset):
         pose_angles = np.zeros((total_frames, 3), dtype=np.float32)
         analyzer = self._get_face_analyzer()
         previous_face_box = [0, 0, frames.shape[2], frames.shape[1]]
-        previous_pose = np.zeros(3, dtype=np.float32)
 
         for i in range(total_frames):
             frame = frames[i][:, :, :3].astype(np.uint8)
@@ -384,10 +483,9 @@ class BaseLoader(Dataset):
                 faces = analyzer.get(frame)
                 if len(faces) > 0:
                     face = self._select_largest_face(faces)
-                    pose = self._pose_from_insightface(face, previous_pose)
+                    pose = self._pose_from_insightface(face, None)
                     face_box = self._square_face_box_from_insightface(face)
                     previous_face_box = face_box
-                    previous_pose = pose
                     pose_angles[i] = pose
 
                     if hasattr(face, "kps") and face.kps is not None:
@@ -400,9 +498,9 @@ class BaseLoader(Dataset):
                     else:
                         crop = frame
                 else:
-                    print("ERROR: No Face Detected")
+                    print("WARNING: No face detected; reusing previous crop and interpolating pose later.")
                     face_box = previous_face_box
-                    pose_angles[i] = previous_pose
+                    pose_angles[i] = np.nan
 
                 if crop is frame:
                     if use_larger_box:
@@ -608,12 +706,15 @@ class BaseLoader(Dataset):
             input_path_name = self.cached_path + os.sep + "{0}_input{1}.npy".format(filename, str(count))
             label_path_name = self.cached_path + os.sep + "{0}_label{1}.npy".format(filename, str(count))
             pose_path_name = self.cached_path + os.sep + "{0}_pose{1}.npy".format(filename, str(count))
+            flow_path_name = self.cached_path + os.sep + "{0}_flow{1}.npy".format(filename, str(count))
             self.inputs.append(input_path_name)
             self.labels.append(label_path_name)
             np.save(input_path_name, frames_clips[i])
             np.save(label_path_name, bvps_clips[i])
             if self._last_pose_clips is not None:
                 np.save(pose_path_name, self._last_pose_clips[i])
+            if self._last_flow_clips is not None:
+                np.save(flow_path_name, self._last_flow_clips[i])
             count += 1
         return count
 
@@ -638,12 +739,15 @@ class BaseLoader(Dataset):
             input_path_name = self.cached_path + os.sep + "{0}_input{1}.npy".format(filename, str(count))
             label_path_name = self.cached_path + os.sep + "{0}_label{1}.npy".format(filename, str(count))
             pose_path_name = self.cached_path + os.sep + "{0}_pose{1}.npy".format(filename, str(count))
+            flow_path_name = self.cached_path + os.sep + "{0}_flow{1}.npy".format(filename, str(count))
             input_path_name_list.append(input_path_name)
             label_path_name_list.append(label_path_name)
             np.save(input_path_name, frames_clips[i])
             np.save(label_path_name, bvps_clips[i])
             if self._last_pose_clips is not None:
                 np.save(pose_path_name, self._last_pose_clips[i])
+            if self._last_flow_clips is not None:
+                np.save(flow_path_name, self._last_flow_clips[i])
             count += 1
         return input_path_name_list, label_path_name_list
 
